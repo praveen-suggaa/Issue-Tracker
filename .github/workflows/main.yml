@@ -21,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests supabase-py python-dotenv
+        pip install requests supabase-py
     
     - name: Sync GitHub Project Items to Supabase
       env:
@@ -29,7 +29,7 @@ jobs:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       run: |
-        python - << EOF
+        python3 << 'EOF'
 import os
 import json
 import requests
@@ -41,9 +41,9 @@ supabase_url = os.environ['SUPABASE_URL']
 supabase_key = os.environ['SUPABASE_KEY']
 
 # Initialize Supabase client
-supabase: Client = create_client(supabase_url, supabase_key)
+supabase = create_client(supabase_url, supabase_key)
 
-# GitHub GraphQL query (similar to your AppScript)
+# GitHub GraphQL query
 def create_graphql_query(org, project_number):
     return {
         "query": f'''
@@ -129,14 +129,14 @@ def sync_project_items_to_supabase(data):
     for item in items:
         # Prepare project item data
         project_item_data = {
-            'issue_title': item['content']['title'] if item.get('content') else 'No Title',
-            'issue_number': item['content']['number'] if item.get('content') else None,
-            'issue_url': item['content']['url'] if item.get('content') else None,
+            'issue_title': item.get('content', {}).get('title', 'No Title'),
+            'issue_number': item.get('content', {}).get('number'),
+            'issue_url': item.get('content', {}).get('url'),
             
             # Process assignees
             'assignees': ', '.join([
                 assignee['login'] for assignee in 
-                (item['content']['assignees']['nodes'] if item.get('content', {}).get('assignees') else [])
+                (item.get('content', {}).get('assignees', {}).get('nodes', []))
             ]) or 'Unassigned',
             
             # Default field map
