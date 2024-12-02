@@ -115,6 +115,7 @@ import 'dotenv/config';
       const assignees = item.content.assignees ? item.content.assignees.nodes.map(assignee => assignee.login) : ["Unassigned"];
   
       const currentTime = new Date();
+      const istTime = new Date(currentTime.getTime() + (330 * 60 * 1000));
   
       // Check if the issue already exists in Supabase based on the issue_number
       const { data: existingIssue, error: fetchError } = await supabase
@@ -146,12 +147,11 @@ import 'dotenv/config';
   
         // Only add start_time if it doesn't already exist and status is "In progress"
         if (status === "In progress" && !existingIssue.start_time) {
-          updateData.start_time = currentTime;
+          updateData.start_time = istTime;
         }
-  
-        // Only add end_time if it doesn't already exist and status is "Done"
+        
         if (status === "Done" && !existingIssue.end_time) {
-          updateData.end_time = currentTime;
+          updateData.end_time = istTime;
         }
   
         const { data, error } = await supabase
@@ -183,12 +183,12 @@ import 'dotenv/config';
   
         // Set start_time only if status is "In progress"
         if (status === "In progress") {
-          insertData.start_time = currentTime;
+          insertData.start_time = istTime;
         }
   
         // Set end_time only if status is "Done"
         if (status === "Done") {
-          insertData.end_time = currentTime;
+          insertData.end_time = istTime;
         }
   
         const { data, error } = await supabase
