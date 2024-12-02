@@ -2,16 +2,15 @@ name: Sync GitHub Project Items to Supabase
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Run daily at midnight
-  workflow_dispatch:  # Allow manual triggering
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   sync-project-items:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -22,20 +21,20 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install requests supabase-py
-    
-    - name: Sync GitHub Project Items to Supabase
+
+    - name: Run sync script
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       run: |
-        python3 << 'EOF'
+        python3 - << 'EOF'
 import os
 import json
 import requests
-from supabase import create_client, Client
+from supabase import create_client
 
-# GitHub and Supabase configuration
+# Configuration
 github_token = os.environ['GITHUB_TOKEN']
 supabase_url = os.environ['SUPABASE_URL']
 supabase_key = os.environ['SUPABASE_KEY']
@@ -57,27 +56,15 @@ def create_graphql_query(org, project_number):
                     nodes {{
                       ... on ProjectV2ItemFieldTextValue {{
                         text
-                        field {{
-                          ... on ProjectV2Field {{
-                            name
-                          }}
-                        }}
+                        field {{ name }}
                       }}
                       ... on ProjectV2ItemFieldSingleSelectValue {{
                         name
-                        field {{
-                          ... on ProjectV2SingleSelectField {{
-                            name
-                          }}
-                        }}
+                        field {{ name }}
                       }}
                       ... on ProjectV2ItemFieldDateValue {{
                         date
-                        field {{
-                          ... on ProjectV2Field {{
-                            name
-                          }}
-                        }}
+                        field {{ name }}
                       }}
                     }}
                   }}
@@ -87,9 +74,7 @@ def create_graphql_query(org, project_number):
                       number
                       url
                       assignees(first: 10) {{
-                        nodes {{
-                          login
-                        }}
+                        nodes {{ login }}
                       }}
                     }}
                   }}
@@ -190,14 +175,12 @@ def sync_project_items_to_supabase(data):
             print(f"Error syncing project item: {e}")
 
 # Main execution
-if __name__ == '__main__':
-    # Replace with your organization and project number
-    org = 'SuggaaVentures'
-    project_number = 7
-    
-    try:
-        project_data = fetch_project_items(org, project_number)
-        sync_project_items_to_supabase(project_data)
-    except Exception as e:
-        print(f"Error in main execution: {e}")
+org = 'SuggaaVentures'
+project_number = 7
+
+try:
+    project_data = fetch_project_items(org, project_number)
+    sync_project_items_to_supabase(project_data)
+except Exception as e:
+    print(f"Error in main execution: {e}")
 EOF
