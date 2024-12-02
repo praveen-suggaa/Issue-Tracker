@@ -1,0 +1,203 @@
+name: Sync GitHub Project Items to Supabase
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  sync-project-items:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests supabase-py python-dotenv
+    
+    - name: Sync GitHub Project Items to Supabase
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      run: |
+        python - << EOF
+import os
+import json
+import requests
+from supabase import create_client, Client
+
+# GitHub and Supabase configuration
+github_token = os.environ['GITHUB_TOKEN']
+supabase_url = os.environ['SUPABASE_URL']
+supabase_key = os.environ['SUPABASE_KEY']
+
+# Initialize Supabase client
+supabase: Client = create_client(supabase_url, supabase_key)
+
+# GitHub GraphQL query (similar to your AppScript)
+def create_graphql_query(org, project_number):
+    return {
+        "query": f'''
+        query {{
+          organization(login: "{org}") {{
+            projectV2(number: {project_number}) {{
+              items(first: 100) {{
+                nodes {{
+                  id
+                  fieldValues(first: 20) {{
+                    nodes {{
+                      ... on ProjectV2ItemFieldTextValue {{
+                        text
+                        field {{
+                          ... on ProjectV2Field {{
+                            name
+                          }}
+                        }}
+                      }}
+                      ... on ProjectV2ItemFieldSingleSelectValue {{
+                        name
+                        field {{
+                          ... on ProjectV2SingleSelectField {{
+                            name
+                          }}
+                        }}
+                      }}
+                      ... on ProjectV2ItemFieldDateValue {{
+                        date
+                        field {{
+                          ... on ProjectV2Field {{
+                            name
+                          }}
+                        }}
+                      }}
+                    }}
+                  }}
+                  content {{
+                    ... on Issue {{
+                      title
+                      number
+                      url
+                      assignees(first: 10) {{
+                        nodes {{
+                          login
+                        }}
+                      }}
+                    }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+        '''
+    }
+
+# Fetch GitHub Project Items
+def fetch_project_items(org, project_number):
+    headers = {
+        'Authorization': f'Bearer {github_token}',
+        'Content-Type': 'application/json',
+    }
+    
+    query = create_graphql_query(org, project_number)
+    
+    response = requests.post(
+        'https://api.github.com/graphql', 
+        headers=headers, 
+        json=query
+    )
+    
+    return response.json()
+
+# Process and sync project items to Supabase
+def sync_project_items_to_supabase(data):
+    if not data.get('data', {}).get('organization', {}).get('projectV2'):
+        print("No project data found")
+        return
+
+    items = data['data']['organization']['projectV2']['items']['nodes']
+    
+    for item in items:
+        # Prepare project item data
+        project_item_data = {
+            'issue_title': item['content']['title'] if item.get('content') else 'No Title',
+            'issue_number': item['content']['number'] if item.get('content') else None,
+            'issue_url': item['content']['url'] if item.get('content') else None,
+            
+            # Process assignees
+            'assignees': ', '.join([
+                assignee['login'] for assignee in 
+                (item['content']['assignees']['nodes'] if item.get('content', {}).get('assignees') else [])
+            ]) or 'Unassigned',
+            
+            # Default field map
+            'status': 'No Status',
+            'priority': 'No Priority',
+            'issue_type': 'No Issue Type',
+            'created_by': 'Unknown',
+            'app_name': 'N/A',
+            'build_type': 'N/A',
+            'build_version': 'N/A',
+            'device_type': 'N/A',
+            'timeline': 'N/A'
+        }
+        
+        # Process field values
+        if item.get('fieldValues', {}).get('nodes'):
+            for field_value in item['fieldValues']['nodes']:
+                if field_value.get('field', {}).get('name'):
+                    field_name = field_value['field']['name'].lower()
+                    value = (field_value.get('text') or 
+                             field_value.get('name') or 
+                             field_value.get('date') or 
+                             'No Value')
+                    
+                    # Map field names to our data structure
+                    field_mapping = {
+                        'status': 'status',
+                        'priority': 'priority',
+                        'issue type': 'issue_type',
+                        'created by': 'created_by',
+                        'app name': 'app_name',
+                        'build type': 'build_type',
+                        'build version': 'build_version',
+                        'device type': 'device_type',
+                        'timeline': 'timeline'
+                    }
+                    
+                    # Update corresponding field if found
+                    for key, mapped_key in field_mapping.items():
+                        if key == field_name:
+                            project_item_data[mapped_key] = value
+        
+        # Upsert to Supabase
+        try:
+            result = supabase.table('project_items').upsert(
+                project_item_data, 
+                on_conflict='issue_number'
+            ).execute()
+            print(f"Synced project item: {project_item_data['issue_title']}")
+        except Exception as e:
+            print(f"Error syncing project item: {e}")
+
+# Main execution
+if __name__ == '__main__':
+    # Replace with your organization and project number
+    org = 'SuggaaVentures'
+    project_number = 7
+    
+    try:
+        project_data = fetch_project_items(org, project_number)
+        sync_project_items_to_supabase(project_data)
+    except Exception as e:
+        print(f"Error in main execution: {e}")
+EOF
