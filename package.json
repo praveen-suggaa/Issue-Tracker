@@ -1,0 +1,17 @@
+{
+  "name": "sync-project-items",
+  "version": "1.0.0",
+  "description": "A script to sync GitHub project items to a Supabase database",
+  "type": "module",
+  "main": "sync-project-items.js",
+  "scripts": {
+    "start": "node sync-project-items.js"
+  },
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@octokit/graphql": "^7.0.0",
+    "@supabase/supabase-js": "^2.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
