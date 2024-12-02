@@ -1,70 +1,58 @@
-// Use dynamic import to load the @octokit/graphql module (ESM)
-const { createClient } = require('@supabase/supabase-js');
+import { createClient } from '@supabase/supabase-js';
+import { graphql } from '@octokit/graphql';
 
-(async () => {
-  const { graphql } = await import('@octokit/graphql');
+// Configuration
+const GITHUB_TOKEN = process.env.PAT;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-  // Configuration
-  const githubToken = process.env.PAT;
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_KEY;
+// Initialize Supabase client
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  // Initialize Supabase client
-  const supabase = createClient(supabaseUrl, supabaseKey);
-
-  // GitHub GraphQL query function
-  async function fetchProjectItems(org, projectNumber) {
-    const graphqlWithAuth = graphql.defaults({
-      headers: {
-        authorization: `token ${githubToken}`
-      }
-    });
-
-    const query = `
-      query ($org: String!, $projectNumber: Int!) {
-        organization(login: $org) {
-          projectV2(number: $projectNumber) {
-            items(first: 100) {
+// GitHub GraphQL API query
+const QUERY = `
+  query ($org: String!, $projectNumber: Int!) {
+    organization(login: $org) {
+      projectV2(number: $projectNumber) {
+        items(first: 100) {
+          nodes {
+            id
+            fieldValues(first: 20) {
               nodes {
-                id
-                fieldValues(first: 20) {
-                  nodes {
-                    ... on ProjectV2ItemFieldTextValue {
-                      text
-                      field {
-                        ... on ProjectV2Field {
-                          name
-                        }
-                      }
-                    }
-                    ... on ProjectV2ItemFieldSingleSelectValue {
+                ... on ProjectV2ItemFieldTextValue {
+                  text
+                  field {
+                    ... on ProjectV2Field {
                       name
-                      field {
-                        ... on ProjectV2SingleSelectField {
-                          name
-                        }
-                      }
-                    }
-                    ... on ProjectV2ItemFieldDateValue {
-                      date
-                      field {
-                        ... on ProjectV2Field {
-                          name
-                        }
-                      }
                     }
                   }
                 }
-                content {
-                  ... on Issue {
-                    title
-                    number
-                    url
-                    assignees(first: 10) {
-                      nodes {
-                        login
-                      }
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field {
+                    ... on ProjectV2SingleSelectField {
+                      name
                     }
+                  }
+                }
+                ... on ProjectV2ItemFieldDateValue {
+                  date
+                  field {
+                    ... on ProjectV2Field {
+                      name
+                    }
+                  }
+                }
+              }
+            }
+            content {
+              ... on Issue {
+                title
+                number
+                url
+                assignees(first: 10) {
+                  nodes {
+                    login
                   }
                 }
               }
@@ -72,109 +60,118 @@ const { createClient } = require('@supabase/supabase-js');
           }
         }
       }
-    `;
-
-    try {
-      const result = await graphqlWithAuth({
-        query,
-        org,
-        projectNumber
-      });
-      return result;
-    } catch (error) {
-      console.error('Error fetching project items:', error);
-      throw error;
     }
   }
+`;
 
-  // Sync project items to Supabase
-  async function syncProjectItemsToSupabase(data) {
-    const items = data.organization.projectV2.items.nodes;
+// Fetch GitHub project items
+async function fetchProjectItems(org, projectNumber) {
+  const graphqlWithAuth = graphql.defaults({
+    headers: {
+      authorization: `Bearer ${GITHUB_TOKEN}`,
+    },
+  });
 
-    for (const item of items) {
-      // Prepare project item data
-      const projectItemData = {
-        issue_title: item.content?.title || 'No Title',
-        issue_number: item.content?.number,
-        issue_url: item.content?.url,
-        
-        // Process assignees
-        assignees: item.content?.assignees?.nodes
-          ?.map(assignee => assignee.login)
-          .join(', ') || 'Unassigned',
-        
-        // Default field map
-        status: 'No Status',
-        priority: 'No Priority',
-        issue_type: 'No Issue Type',
-        created_by: 'Unknown',
-        app_name: 'N/A',
-        build_type: 'N/A',
-        build_version: 'N/A',
-        device_type: 'N/A',
-        timeline: 'N/A'
-      };
+  try {
+    const result = await graphqlWithAuth({
+      query: QUERY,
+      org,
+      projectNumber,
+    });
+    return result.data.organization.projectV2.items.nodes;
+  } catch (error) {
+    console.error('Error fetching project items:', error);
+    throw error;
+  }
+}
 
-      // Process field values
-      if (item.fieldValues?.nodes) {
-        for (const fieldValue of item.fieldValues.nodes) {
-          if (fieldValue.field?.name) {
-            const fieldName = fieldValue.field.name.toLowerCase();
-            const value = fieldValue.text || fieldValue.name || fieldValue.date || 'No Value';
+// Sync project items to Supabase
+async function syncProjectItems(items) {
+  for (const item of items) {
+    const issueNumber = item.content?.number || 'N/A';
+    const issueKey = `issue_${issueNumber}`;
 
-            // Map field names to our data structure
-            const fieldMapping = {
-              'status': 'status',
-              'priority': 'priority',
-              'issue type': 'issue_type',
-              'created by': 'created_by',
-              'app name': 'app_name',
-              'build type': 'build_type',
-              'build version': 'build_version',
-              'device type': 'device_type',
-              'timeline': 'timeline'
-            };
+    // Default field mapping
+    const fieldMap = {
+      Status: 'No Status',
+      Priority: 'No Priority',
+      'Issue Type': 'No Issue Type',
+      'Created By': 'Unknown',
+      'App Name': 'N/A',
+      'Build Type': 'N/A',
+      'Build Version': 'N/A',
+      'Device Type': 'N/A',
+      Timeline: 'N/A',
+    };
 
-            // Update corresponding field if found
-            for (const [key, mappedKey] of Object.entries(fieldMapping)) {
-              if (key === fieldName) {
-                projectItemData[mappedKey] = value;
-              }
+    // Process field values
+    if (item.fieldValues?.nodes) {
+      for (const fieldValue of item.fieldValues.nodes) {
+        if (fieldValue.field?.name) {
+          const fieldName = fieldValue.field.name;
+          const value = fieldValue.text || fieldValue.name || fieldValue.date || 'No Value';
+
+          Object.keys(fieldMap).forEach((key) => {
+            if (key.toLowerCase() === fieldName.toLowerCase()) {
+              fieldMap[key] = value;
             }
-          }
-        }
-      }
-
-      // Upsert to Supabase
-      try {
-        const { data, error } = await supabase
-          .from('project_items')
-          .upsert(projectItemData, { 
-            onConflict: 'issue_number',
-            returning: 'minimal'
           });
-
-        if (error) throw error;
-        console.log(`Synced project item: ${projectItemData.issue_title}`);
-      } catch (error) {
-        console.error(`Error syncing project item: ${error.message}`);
+        }
       }
     }
-  }
 
-  // Main execution
-  async function main() {
-    const org = 'SuggaaVentures';
-    const projectNumber = 7;
+    // Process assignees
+    const assignees = item.content?.assignees?.nodes.map((a) => a.login).join(', ') || 'Unassigned';
+
+    // Prepare data for Supabase
+    const projectItemData = {
+      issue_title: item.content?.title || 'No Title',
+      issue_number: issueNumber,
+      issue_url: item.content?.url || 'N/A',
+      assignees,
+      status: fieldMap.Status,
+      priority: fieldMap.Priority,
+      issue_type: fieldMap['Issue Type'],
+      created_by: fieldMap['Created By'],
+      app_name: fieldMap['App Name'],
+      build_type: fieldMap['Build Type'],
+      build_version: fieldMap['Build Version'],
+      device_type: fieldMap['Device Type'],
+      timeline: fieldMap.Timeline,
+    };
 
     try {
-      const projectData = await fetchProjectItems(org, projectNumber);
-      await syncProjectItemsToSupabase(projectData);
+      const { error } = await supabase
+        .from('project_items')
+        .upsert(projectItemData, { onConflict: 'issue_number', returning: 'minimal' });
+
+      if (error) {
+        console.error(`Error syncing issue ${issueNumber}:`, error.message);
+      } else {
+        console.log(`Synced issue ${issueNumber}: ${projectItemData.issue_title}`);
+      }
     } catch (error) {
-      console.error('Error in main execution:', error);
-      process.exit(1);
+      console.error(`Unexpected error syncing issue ${issueNumber}:`, error);
     }
   }
+}
 
-  main();
-})();
+// Main function
+async function main() {
+  const ORG = 'SuggaaVentures';
+  const PROJECT_NUMBER = 7;
+
+  try {
+    const items = await fetchProjectItems(ORG, PROJECT_NUMBER);
+    if (!items || items.length === 0) {
+      console.log('No items found in the project.');
+      return;
+    }
+    await syncProjectItems(items);
+  } catch (error) {
+    console.error('Error in main execution:', error);
+    process.exit(1);
+  }
+}
+
+main();
