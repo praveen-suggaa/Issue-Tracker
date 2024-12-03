@@ -18,8 +18,8 @@ import 'dotenv/config';
   async function fetchAllProjectItems(org, projectNumber) {
     const graphqlWithAuth = graphql.defaults({
       headers: {
-        authorization: `token ${githubToken}`
-      }
+        authorization: `token ${githubToken}`,
+      },
     });
 
     const query = `
@@ -81,10 +81,9 @@ import 'dotenv/config';
       const result = await graphqlWithAuth({
         query,
         org,
-        projectNumber
+        projectNumber,
       });
 
-      // Convert createdAt to IST for each item
       const nodes = result.organization.projectV2.items.nodes.map((item) => {
         if (item.content?.createdAt) {
           const utcDate = new Date(item.content.createdAt);
@@ -112,63 +111,63 @@ import 'dotenv/config';
       const issueUrl = item.content ? item.content.url : "N/A";
       const createdAtIST = item.content?.createdAtIST || "Unknown";
 
-      // Safely access the title
-      const issueTitle = item.fieldValues.nodes.find(field => field.field?.name === "Title")?.text || "No Title";
-      
-      // Safely access other fields
-      const priority = item.fieldValues.nodes.find(field => field.field?.name === "Priority")?.name || "No Priority";
-      const issueType = item.fieldValues.nodes.find(field => field.field?.name === "Issue Type")?.name || "No Issue Type";
-      const createdBy = item.fieldValues.nodes.find(field => field.field?.name === "Created by")?.text || "Unknown";
-      const appName = item.fieldValues.nodes.find(field => field.field?.name === "App Name")?.name || "N/A";
-      const buildType = item.fieldValues.nodes.find(field => field.field?.name === "Build Type")?.name || "N/A";
-      const buildVersion = item.fieldValues.nodes.find(field => field.field?.name === "Build Version")?.text || "N/A";
-      const deviceType = item.fieldValues.nodes.find(field => field.field?.name === "Device Type")?.name || "N/A";
-      const status = item.fieldValues.nodes.find(field => field.field?.name === "Status")?.name || "No Status";
+      const issueTitle = item.fieldValues.nodes.find((field) => field.field?.name === "Title")?.text || "No Title";
+      const priority = item.fieldValues.nodes.find((field) => field.field?.name === "Priority")?.name || "No Priority";
+      const issueType = item.fieldValues.nodes.find((field) => field.field?.name === "Issue Type")?.name || "No Issue Type";
+      const createdBy = item.fieldValues.nodes.find((field) => field.field?.name === "Created by")?.text || "Unknown";
+      const appName = item.fieldValues.nodes.find((field) => field.field?.name === "App Name")?.name || "N/A";
+      const buildType = item.fieldValues.nodes.find((field) => field.field?.name === "Build Type")?.name || "N/A";
+      const buildVersion = item.fieldValues.nodes.find((field) => field.field?.name === "Build Version")?.text || "N/A";
+      const deviceType = item.fieldValues.nodes.find((field) => field.field?.name === "Device Type")?.name || "N/A";
+      const status = item.fieldValues.nodes.find((field) => field.field?.name === "Status")?.name || "No Status";
 
-      // Assignees: Map usernames of assignees
-      const assignees = item.content.assignees ? item.content.assignees.nodes.map(assignee => assignee.login) : ["Unassigned"];
+      const assignees = item.content.assignees ? item.content.assignees.nodes.map((assignee) => assignee.login) : ["Unassigned"];
 
       const currentTime = new Date();
-      const istTime = new Date(currentTime.getTime() + (330 * 60 * 1000));
+      const istTime = new Date(currentTime.getTime() + 330 * 60 * 1000);
+      const adjustedTime = new Date(istTime.getTime() - (10 * 60 * 1000));
 
-      // Check if the issue already exists in Supabase based on the issue_number
       const { data: existingIssue, error: fetchError } = await supabase
         .from('issue_tracker')
-        .select('issue_number, start_time, end_time')
+        .select('issue_number, start_time, end_time, updated_at, status')
         .eq('issue_number', issueNumber)
         .single();
 
-      if (fetchError && fetchError.code !== 'PGRST116') { // Ignore "not found" error code
+      if (fetchError && fetchError.code !== 'PGRST116') {
         console.error('Error checking for existing issue:', fetchError.message);
         continue;
       }
 
+      const updateData = {
+        issue_title: issueTitle,
+        issue_url: issueUrl,
+        assignees: assignees,
+        priority: priority,
+        issue_type: issueType,
+        created_by: createdBy,
+        app_name: appName,
+        build_type: buildType,
+        build_version: buildVersion,
+        device_type: deviceType,
+        created_at: createdAtIST,
+      };
+
+      // Only update updated_at and status if there's an actual status change
+      if (!existingIssue || existingIssue.status !== status) {
+        updateData.status = status;
+        updateData.updated_at = istTime.toISOString();
+      }
+
+      // Handle start and end times
+      if (status === "In progress" && (!existingIssue || !existingIssue.start_time)) {
+        updateData.start_time = adjustedTime;
+      }
+
+      if (status === "Done" && (!existingIssue || !existingIssue.end_time)) {
+        updateData.end_time = adjustedTime;
+      }
+
       if (existingIssue) {
-        // If the issue exists, prepare update data
-        const updateData = {
-          issue_title: issueTitle,
-          issue_url: issueUrl,
-          assignees: assignees,
-          status: status,
-          priority: priority,
-          issue_type: issueType,
-          created_by: createdBy,
-          app_name: appName,
-          build_type: buildType,
-          build_version: buildVersion,
-          device_type: deviceType,
-          created_at: createdAtIST // Store IST time
-        };
-
-        // Only add start_time if it doesn't already exist and status is "In progress"
-        if (status === "In progress" && !existingIssue.start_time) {
-          updateData.start_time = istTime;
-        }
-        
-        if (status === "Done" && !existingIssue.end_time) {
-          updateData.end_time = istTime;
-        }
-
         const { data, error } = await supabase
           .from('issue_tracker')
           .update(updateData)
@@ -176,40 +175,17 @@ import 'dotenv/config';
 
         if (error) {
           console.error('Error updating project item:', error.message);
-        } else {
-          console.log('Project item updated successfully:', data);
+        } else if (data) {
+          console.log('Project item updated successfully:', updateData.updated_at ? 'with status update' : 'without status change');
         }
       } else {
-        // If the issue does not exist, insert a new record
-        const insertData = {
-          issue_title: issueTitle,
-          issue_number: issueNumber,
-          issue_url: issueUrl,
-          assignees: assignees,
-          status: status,
-          priority: priority,
-          issue_type: issueType,
-          created_by: createdBy,
-          app_name: appName,
-          build_type: buildType,
-          build_version: buildVersion,
-          device_type: deviceType,
-          created_at: createdAtIST // Store IST time
-        };
-
-        // Set start_time only if status is "In progress"
-        if (status === "In progress") {
-          insertData.start_time = istTime;
-        }
-
-        // Set end_time only if status is "Done"
-        if (status === "Done") {
-          insertData.end_time = istTime;
-        }
+        // For new issues, set updated_at
+        updateData.updated_at = istTime.toISOString();
+        updateData.issue_number = issueNumber;
 
         const { data, error } = await supabase
           .from('issue_tracker')
-          .insert([insertData]);
+          .insert([updateData]);
 
         if (error) {
           console.error('Error syncing project item:', error.message);
@@ -220,10 +196,8 @@ import 'dotenv/config';
     }
   }
 
-  // Main execution
   async function main() {
     const org = 'SuggaaVentures';
-    const projectNumber = 7;
 
     for (const projectNumber of projectNumbers) {
       try {
@@ -236,5 +210,6 @@ import 'dotenv/config';
       }
     }
   }
+
   main();
 })();
