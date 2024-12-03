@@ -1,7 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import 'dotenv/config';
 
-
 (async () => {
   const { graphql } = await import('@octokit/graphql');
 
@@ -13,8 +12,10 @@ import 'dotenv/config';
   // Initialize Supabase client
   const supabase = createClient(supabaseUrl, supabaseKey);
 
+  const projectNumbers = [7, 12, 18, 16, 15];
+
   // GitHub GraphQL query function
-  async function fetchProjectItems(org, projectNumber) {
+  async function fetchAllProjectItems(org, projectNumber) {
     const graphqlWithAuth = graphql.defaults({
       headers: {
         authorization: `token ${githubToken}`
@@ -61,6 +62,7 @@ import 'dotenv/config';
                     title
                     number
                     url
+                    createdAt
                     assignees(first: 10) {
                       nodes {
                         login
@@ -81,7 +83,18 @@ import 'dotenv/config';
         org,
         projectNumber
       });
-      return result.organization.projectV2.items.nodes; // Return nodes directly
+
+      // Convert createdAt to IST for each item
+      const nodes = result.organization.projectV2.items.nodes.map((item) => {
+        if (item.content?.createdAt) {
+          const utcDate = new Date(item.content.createdAt);
+          const istDate = new Date(utcDate.getTime() + 330 * 60 * 1000); // Add 330 minutes for IST
+          item.content.createdAtIST = istDate.toISOString(); // Add createdAtIST field
+        }
+        return item;
+      });
+
+      return nodes;
     } catch (error) {
       console.error('Error fetching project items:', error);
       throw error;
@@ -93,11 +106,12 @@ import 'dotenv/config';
       console.error('No items to sync or invalid data structure');
       return; // Exit if items is not an array or is empty
     }
-  
+
     for (let item of items) {
       const issueNumber = item.content ? item.content.number : "N/A";
       const issueUrl = item.content ? item.content.url : "N/A";
-  
+      const createdAtIST = item.content?.createdAtIST || "Unknown";
+
       // Safely access the title
       const issueTitle = item.fieldValues.nodes.find(field => field.field?.name === "Title")?.text || "No Title";
       
@@ -110,25 +124,25 @@ import 'dotenv/config';
       const buildVersion = item.fieldValues.nodes.find(field => field.field?.name === "Build Version")?.text || "N/A";
       const deviceType = item.fieldValues.nodes.find(field => field.field?.name === "Device Type")?.name || "N/A";
       const status = item.fieldValues.nodes.find(field => field.field?.name === "Status")?.name || "No Status";
-  
+
       // Assignees: Map usernames of assignees
       const assignees = item.content.assignees ? item.content.assignees.nodes.map(assignee => assignee.login) : ["Unassigned"];
-  
+
       const currentTime = new Date();
       const istTime = new Date(currentTime.getTime() + (330 * 60 * 1000));
-  
+
       // Check if the issue already exists in Supabase based on the issue_number
       const { data: existingIssue, error: fetchError } = await supabase
         .from('issue_tracker')
         .select('issue_number, start_time, end_time')
         .eq('issue_number', issueNumber)
         .single();
-  
+
       if (fetchError && fetchError.code !== 'PGRST116') { // Ignore "not found" error code
         console.error('Error checking for existing issue:', fetchError.message);
         continue;
       }
-  
+
       if (existingIssue) {
         // If the issue exists, prepare update data
         const updateData = {
@@ -142,9 +156,10 @@ import 'dotenv/config';
           app_name: appName,
           build_type: buildType,
           build_version: buildVersion,
-          device_type: deviceType
+          device_type: deviceType,
+          created_at: createdAtIST // Store IST time
         };
-  
+
         // Only add start_time if it doesn't already exist and status is "In progress"
         if (status === "In progress" && !existingIssue.start_time) {
           updateData.start_time = istTime;
@@ -153,12 +168,12 @@ import 'dotenv/config';
         if (status === "Done" && !existingIssue.end_time) {
           updateData.end_time = istTime;
         }
-  
+
         const { data, error } = await supabase
           .from('issue_tracker')
           .update(updateData)
           .eq('issue_number', issueNumber);
-  
+
         if (error) {
           console.error('Error updating project item:', error.message);
         } else {
@@ -178,23 +193,24 @@ import 'dotenv/config';
           app_name: appName,
           build_type: buildType,
           build_version: buildVersion,
-          device_type: deviceType
+          device_type: deviceType,
+          created_at: createdAtIST // Store IST time
         };
-  
+
         // Set start_time only if status is "In progress"
         if (status === "In progress") {
           insertData.start_time = istTime;
         }
-  
+
         // Set end_time only if status is "Done"
         if (status === "Done") {
           insertData.end_time = istTime;
         }
-  
+
         const { data, error } = await supabase
           .from('issue_tracker')
           .insert([insertData]);
-  
+
         if (error) {
           console.error('Error syncing project item:', error.message);
         } else {
@@ -204,20 +220,21 @@ import 'dotenv/config';
     }
   }
 
-
   // Main execution
   async function main() {
     const org = 'SuggaaVentures';
     const projectNumber = 7;
 
-    try {
-      const projectData = await fetchProjectItems(org, projectNumber);
-      await syncProjectItemsToSupabase(projectData); // Passing only the nodes array to the sync function
-    } catch (error) {
-      console.error('Error in main execution:', error);
-      process.exit(1);
+    for (const projectNumber of projectNumbers) {
+      try {
+        console.log(`Fetching data for project ${projectNumber}...`);
+        const projectData = await fetchAllProjectItems(org, projectNumber);
+        console.log(`Syncing data for project ${projectNumber}...`);
+        await syncProjectItemsToSupabase(projectData, projectNumber);
+      } catch (error) {
+        console.error(`Error in processing project ${projectNumber}:`, error);
+      }
     }
   }
-
   main();
 })();
