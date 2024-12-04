@@ -2,7 +2,7 @@ name: Sync GitHub Project Items to Supabase
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/1 * * * *'
   workflow_dispatch:
 
 jobs:
