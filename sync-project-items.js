@@ -9,12 +9,17 @@ import 'dotenv/config';
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_KEY;
 
+  if (!githubToken || !supabaseUrl || !supabaseKey) {
+    console.error("Missing environment variables. Ensure PAT, SUPABASE_URL, and SUPABASE_KEY are set.");
+    process.exit(1);
+  }
+
   // Initialize Supabase client
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const projectNumbers = [7, 12, 18, 16, 15];
+  const projectNumbers = [12];
 
-  // GitHub GraphQL query function
+  // GitHub GraphQL query function with pagination
   async function fetchAllProjectItems(org, projectNumber) {
     const graphqlWithAuth = graphql.defaults({
       headers: {
@@ -23,10 +28,10 @@ import 'dotenv/config';
     });
 
     const query = `
-      query ($org: String!, $projectNumber: Int!) {
+      query ($org: String!, $projectNumber: Int!, $cursor: String) {
         organization(login: $org) {
           projectV2(number: $projectNumber) {
-            items(first: 100) {
+            items(first: 100, after: $cursor) {
               nodes {
                 id
                 fieldValues(first: 20) {
@@ -71,39 +76,53 @@ import 'dotenv/config';
                   }
                 }
               }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
         }
       }
     `;
 
-    try {
-      const result = await graphqlWithAuth({
-        query,
-        org,
-        projectNumber,
-      });
+    let allNodes = [];
+    let hasNextPage = true;
+    let cursor = null;
 
-      const nodes = result.organization.projectV2.items.nodes.map((item) => {
-        if (item.content?.createdAt) {
-          const utcDate = new Date(item.content.createdAt);
-          const istDate = new Date(utcDate.getTime() + 330 * 60 * 1000); // Add 330 minutes for IST
-          item.content.createdAtIST = istDate.toISOString(); // Add createdAtIST field
-        }
-        return item;
-      });
+    while (hasNextPage) {
+      try {
+        const result = await graphqlWithAuth({
+          query,
+          org,
+          projectNumber,
+          cursor,
+        });
 
-      return nodes;
-    } catch (error) {
-      console.error('Error fetching project items:', error);
-      throw error;
+        const { nodes, pageInfo } = result.organization.projectV2.items;
+        allNodes = allNodes.concat(nodes);
+        hasNextPage = pageInfo.hasNextPage;
+        cursor = pageInfo.endCursor;
+      } catch (error) {
+        console.error("Error fetching project items:", error);
+        throw error;
+      }
     }
+
+    return allNodes.map((item) => {
+      if (item.content?.createdAt) {
+        const utcDate = new Date(item.content.createdAt);
+        const istDate = new Date(utcDate.getTime() + 330 * 60 * 1000); // Add 330 minutes for IST
+        item.content.createdAtIST = istDate.toISOString(); // Add createdAtIST field
+      }
+      return item;
+    });
   }
 
   async function syncProjectItemsToSupabase(items) {
     if (!Array.isArray(items) || items.length === 0) {
-      console.error('No items to sync or invalid data structure');
-      return; // Exit if items is not an array or is empty
+      console.error("No items to sync or invalid data structure");
+      return;
     }
 
     for (let item of items) {
@@ -152,13 +171,11 @@ import 'dotenv/config';
         created_at: createdAtIST,
       };
 
-      // Only update updated_at and status if there's an actual status change
       if (!existingIssue || existingIssue.status !== status) {
         updateData.status = status;
         updateData.updated_at = istTime.toISOString();
       }
 
-      // Handle start and end times
       if (status === "In progress" && (!existingIssue || !existingIssue.start_time)) {
         updateData.start_time = adjustedTime;
       }
@@ -168,29 +185,28 @@ import 'dotenv/config';
       }
 
       if (existingIssue) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('issue_tracker')
           .update(updateData)
           .eq('issue_number', issueNumber);
 
         if (error) {
           console.error('Error updating project item:', error.message);
-        } else if (data) {
-          console.log('Project item updated successfully:', updateData.updated_at ? 'with status update' : 'without status change');
+        } else {
+          console.log('Project item updated successfully.');
         }
       } else {
-        // For new issues, set updated_at
         updateData.updated_at = istTime.toISOString();
         updateData.issue_number = issueNumber;
 
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('issue_tracker')
           .insert([updateData]);
 
         if (error) {
           console.error('Error syncing project item:', error.message);
         } else {
-          console.log('Project item inserted successfully:', data);
+          console.log('Project item inserted successfully.');
         }
       }
     }
@@ -204,7 +220,7 @@ import 'dotenv/config';
         console.log(`Fetching data for project ${projectNumber}...`);
         const projectData = await fetchAllProjectItems(org, projectNumber);
         console.log(`Syncing data for project ${projectNumber}...`);
-        await syncProjectItemsToSupabase(projectData, projectNumber);
+        await syncProjectItemsToSupabase(projectData);
       } catch (error) {
         console.error(`Error in processing project ${projectNumber}:`, error);
       }
