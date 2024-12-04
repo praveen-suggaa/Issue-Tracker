@@ -17,7 +17,7 @@ import 'dotenv/config';
   // Initialize Supabase client
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const projectNumbers = [12];
+  const projectNumbers = [7, 12, 18, 16, 15];
 
   // GitHub GraphQL query function with pagination
   async function fetchAllProjectItems(org, projectNumber) {
